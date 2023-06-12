@@ -17,7 +17,9 @@
   [make-repl-group (->* ()
                         (#:log-file path-string?
                                     #:prompt (or/c #f string?)
-                                    #:make-namespace (-> namespace?))
+                                    #:make-namespace (-> namespace?)
+                                    #:pre-content (listof string?)
+                                    #:persist? boolean?)
                         repl-group?)]
   [make-module-backing (->* (repl-group?)
                             (#:module-name path-string?
@@ -36,10 +38,10 @@
                     pict?)]
   [result-area (->* (repl-group?)
                     (#:width real?
-                             #:height real?
-                             #:background (or/c #f (is-a?/c color%) string?)
-                             #:font-size (or/c #f (integer-in 1 1024))
-                             #:own-size? boolean?)
+                     #:height real?
+                     #:background (or/c #f (is-a?/c color%) string?)
+                     #:font-size (or/c #f (integer-in 1 1024))
+                     #:own-size? boolean?)
                     #:rest (listof string?)
                     pict?)]
   [repl-area (->* ()
@@ -49,6 +51,8 @@
                              #:font-size (or/c #f (integer-in 1 1024))
                              #:own-size? boolean?
                              #:prompt string?
+                             #:pre-content (listof string?)
+                             #:persist? boolean?
                              #:make-namespace (-> namespace?))
                   #:rest (listof string?)
                   pict?)]))
@@ -90,6 +94,8 @@
 
 (define (make-repl-group #:log-file [log-file "eval-log.rktl"]
                          #:prompt [prompt-str #f]
+                         #:pre-content [pre-content '()]
+                         #:persist? [persist? #f]
                          #:make-namespace [make-namespace make-base-namespace])
   (define result-editor
     (new (class repl-text%
@@ -99,7 +105,7 @@
          [namespace (make-namespace)]))
   (define result-custodian (make-custodian))
   (define (reset-custodian!)
-    (custodian-shutdown-all result-custodian)
+    #;(custodian-shutdown-all result-custodian)
     (set! result-custodian (make-custodian)))
 
   (define available (make-hash))
@@ -169,7 +175,7 @@
                      (send result-editor get-value-port)]
                     [current-error-port
                      (send result-editor get-err-port)]
-                    [exit-handler (lambda (v)
+                    #;[exit-handler (lambda (v)
                                     (custodian-shutdown-all result-custodian))]
                     [current-print pretty-print-handler]
                     [pretty-print-size-hook
@@ -297,12 +303,32 @@
                                            background)))
       content))
 
+  (define (setup-editor font-size own-size? content)
+    (reset-font! font-size (and own-size? result-editor))
+    (send result-editor reset-console)
+    (when prompt-str
+      (send result-editor initialize-console))
+    (for ([c (in-list pre-content)]
+          [i (in-naturals)])
+         (send result-editor insert c)
+         (send result-editor insert "\n")
+         (send result-editor do-submission))
+    (unless (null? content)
+            (for ([c (in-list content)]
+                  [i (in-naturals)])
+                 (unless (zero? i)
+                   (send result-editor insert "\n"))
+                 (send result-editor insert c))))
+  
+
   (define (result-area #:width w
                        #:height h
                        #:font-size font-size
                        #:own-size? own-size?
                        #:background background
                        content)
+    (when persist?
+      (setup-editor font-size own-size? content))
     (interactive (fit-lines (if (and (pair? content)
                                      prompt-str)
                                 (cons (string-append prompt-str
@@ -311,25 +337,22 @@
                                 content)
                             w h)
                  (lambda (win)
-                   (reset-font! font-size (and own-size? result-editor))
-                   (send result-editor reset-console)
-                   (when prompt-str
-                     (send result-editor initialize-console))
-                   (unless (null? content)
-                     (for ([c (in-list content)]
-                           [i (in-naturals)])
-                       (unless (zero? i)
-                         (send result-editor insert "\n"))
-                       (send result-editor insert c)))
-                   (define c 
+                   (when (not persist?)
+                    (setup-editor font-size own-size? content))
+                   (define c
                      (new editor-canvas% 
                           [parent win]
                           [editor result-editor]
                           [style '(auto-vscroll auto-hscroll no-border)]))
+                   ;; scroll the editor the the last position
+                   (queue-callback
+                    (thunk (send result-editor scroll-to-position (send result-editor last-position))))
                    (unless own-size?
                      (set! on-screen (add1 on-screen)))
                    (install-background c background)
                    (lambda ()
+                     (queue-callback
+                      (thunk (send result-editor scroll-to-position (send result-editor last-position))))
                      (reset-custodian!)
                      (unless own-size?
                        (set! on-screen (sub1 on-screen)))
@@ -385,10 +408,14 @@
                    #:own-size? [own-size? #f]
                    #:background [background #f]
                    #:prompt [prompt-str "> "]
+                   #:pre-content [pre-content '()]
+                   #:persist? [persist? #f]
                    #:make-namespace [make-namespace make-base-namespace]
                    . content)
   (apply result-area (make-repl-group #:prompt prompt-str
-                                      #:make-namespace make-namespace)
+                                      #:make-namespace make-namespace
+                                      #:pre-content pre-content
+                                      #:persist? persist?)
          #:width w
          #:height h
          #:font-size font-size
