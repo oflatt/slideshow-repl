@@ -19,6 +19,8 @@
                                     #:prompt (or/c #f string?)
                                     #:make-namespace (-> namespace?)
                                     #:pre-content (listof string?)
+                                    #:wrap-text? boolean?
+                                    #:eval-callback (-> any)
                                     #:persist? boolean?)
                         repl-group?)]
   [make-module-backing (->* (repl-group?)
@@ -53,6 +55,8 @@
                              #:prompt string?
                              #:pre-content (listof string?)
                              #:persist? boolean?
+                             #:wrap-text? boolean?
+                             #:eval-callback (-> any)
                              #:make-namespace (-> namespace?))
                   #:rest (listof string?)
                   pict?)]))
@@ -96,13 +100,17 @@
                          #:prompt [prompt-str #f]
                          #:pre-content [pre-content '()]
                          #:persist? [persist? #f]
-                         #:make-namespace [make-namespace make-base-namespace])
+                         #:make-namespace [make-namespace make-base-namespace]
+                         #:eval-callback [eval-callback void]
+                         #:wrap-text? [wrap-text? #f])
   (define result-editor
     (new (class repl-text%
            (define/override (get-prompt) (or prompt-str ""))
            (define/override (call-in-eval thunk) (wrap-eval thunk #f))
            (super-new))
          [namespace (make-namespace)]))
+  (when wrap-text?
+    (send result-editor auto-wrap #t))
   (define result-custodian (make-custodian))
   (define (reset-custodian!)
     #;(custodian-shutdown-all result-custodian)
@@ -204,7 +212,8 @@
                                              x))])
             (go)
             (when flush?
-              (flush-output (send result-editor get-value-port)))))))))
+              (flush-output (send result-editor get-value-port))))
+          (eval-callback))))))
 
   (define (do-one-eval name t)
     (define txt (send t get-text))
@@ -411,11 +420,15 @@
                    #:pre-content [pre-content '()]
                    #:persist? [persist? #f]
                    #:make-namespace [make-namespace make-base-namespace]
+                   #:eval-callback [eval-callback void]
+                   #:wrap-text? [wrap-text? #f]
                    . content)
   (apply result-area (make-repl-group #:prompt prompt-str
                                       #:make-namespace make-namespace
                                       #:pre-content pre-content
-                                      #:persist? persist?)
+                                      #:persist? persist?
+                                      #:eval-callback eval-callback
+                                      #:wrap-text? wrap-text?)
          #:width w
          #:height h
          #:font-size font-size
